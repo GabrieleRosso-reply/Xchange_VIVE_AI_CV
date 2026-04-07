@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import os
 
-app = FastAPI(title="LED Color Detection API")
+app = FastAPI()
 
 API_KEY = os.getenv("CV_API_KEY", "supersegreta")
 
