@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-gunicorn
+gunicorn main:app
 python-multipart
 opencv-python-headless
 numpy
