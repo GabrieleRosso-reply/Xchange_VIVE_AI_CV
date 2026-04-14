@@ -1,0 +1,189 @@
+from fastapi import FastAPI, UploadFile, File, Header, HTTPException
+from fastapi.responses import JSONResponse
+import cv2
+import numpy as np
+import os
+import easyocr
+
+
+def analyze_led_circuit_from_bytes(image_bytes: bytes) -> list:
+    """Detect the dominant LED colour in an image using HSV analysis."""
+    np_arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+    if img is None:
+        raise ValueError("Impossibile decodificare l'immagine")
+
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    v_channel = hsv[:, :, 2]
+    blurred_v = cv2.GaussianBlur(v_channel, (15, 15), 0)
+    _, max_val, _, max_loc = cv2.minMaxLoc(blurred_v)
+    x, y = max_loc
+
+   
+    if max_val < 220:
+        return [{"category": "led", "value": "off", "confidence": 0.0}]
+
+    padding = 40
+    h, w = img.shape[:2]
+    x1, y1 = max(0, x - padding), max(0, y - padding)
+    x2, y2 = min(w, x + padding), min(h, y + padding)
+
+    hsv_crop = hsv[y1:y2, x1:x2]
+    color_mask = cv2.inRange(hsv_crop, (0, 100, 150), (180, 255, 255))
+    valid_pixels = hsv_crop[color_mask > 0]
+
+    if len(valid_pixels) == 0:
+        return [{"category": "led", "value": "indeterminato", "confidence": 0.0}]
+
+    color_ranges = {
+        "red": [(0, 10), (165, 180)],
+        "yellow": [(15, 35)],
+        "green": [(45, 85)],
+        "blue": [(100, 130)],
+        "purple": [(135, 160)],
+    }
+
+    hues = valid_pixels[:, 0]
+    votes: dict[str, int] = {}
+
+    for color, ranges in color_ranges.items():
+        count = sum(np.sum((hues >= low) & (hues <= high)) for low, high in ranges)
+        votes[color] = int(count)
+
+    winner = max(votes, key=votes.get)
+    confidence = votes[winner] / len(valid_pixels)
+
+    if confidence < 0.20:
+        return [{"category": "led", "value": "undefined", "confidence": round(float(confidence), 4)}]
+
+    return [{"category": "led", "value": winner, "confidence": round(float(confidence), 4)}]
+
+
+def get_local_background_category(img, bbox) -> str:
+    """Classify the local background around a text bounding-box as 'document' or 'box'."""
+    (tl, tr, br, bl) = bbox
+    x_min, y_min = int(tl[0]), int(tl[1])
+    x_max, y_max = int(br[0]), int(br[1])
+
+    h, w, _ = img.shape
+    pad = 10
+    roi = img[max(0, y_min - pad):min(h, y_max + pad), max(0, x_min - pad):min(w, x_max + pad)]
+
+    if roi.size == 0:
+        return "document"
+
+    hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    median_hsv = np.median(hsv_roi.reshape(-1, 3), axis=0)
+    h_val, s_val, v_val = median_hsv
+
+    if v_val > 170 and s_val < 60:
+        return "document"
+    elif 5 <= h_val <= 35 and s_val > 40:
+        return "box"
+    else:
+        return "document"
+
+
+def analyze_text_from_bytes(image_bytes: bytes) -> list:
+    """Run EasyOCR on an image and return detected text with category metadata."""
+    np_arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+    if img is None:
+        raise ValueError("Impossibile decodificare l'immagine")
+
+    results = reader.readtext(img)
+
+    final_output: list[dict] = []
+    threshold = 0.25
+
+    for res in results:
+        bbox, text, score = res
+        if score > threshold:
+            category = get_local_background_category(img, bbox)
+            final_output.append({
+                "category": category,
+                "value": text,
+                "confidence": round(float(score), 4),
+            })
+
+    return final_output
+
+
+
+'''Shared validation helper'''
+
+def _validate_request(file: UploadFile, x_api_key: str | None) -> None:
+    """Check API key and ensure the uploaded file is an image."""
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Uploaded file must be an image")
+
+
+'''App initialisation'''
+
+app = FastAPI()
+
+API_KEY: str = os.getenv("API_KEY", "ciao")
+
+reader = easyocr.Reader(["it", "en"], gpu=False)
+
+
+'''General endpoints'''
+
+@app.get("/")
+def root():
+    """Simple liveness check."""
+    return {"message": "Computer Vision API is running."}
+
+
+@app.get("/health")
+def health():
+    """Health-check endpoint for orchestrators / load-balancers."""
+    return {"status": "ok"}
+
+
+
+# 1. LED detection only
+@app.post("/predict/led")
+async def predict_led(
+    file: UploadFile = File(...),
+    x_api_key: str = Header(None),
+):
+    """Analyse an image for LED colour detection (fast, OpenCV-based)."""
+    _validate_request(file, x_api_key)
+
+    try:
+        image_bytes = await file.read()
+        led_results = analyze_led_circuit_from_bytes(image_bytes)
+        return JSONResponse(content={"results": led_results})
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
+
+
+
+#2. Text / OCR detection only
+@app.post("/predict/text")
+async def predict_text(
+    file: UploadFile = File(...),
+    x_api_key: str = Header(None),
+):
+    """Analyse an image for text detection / OCR (EasyOCR-based)."""
+    _validate_request(file, x_api_key)
+
+    try:
+        image_bytes = await file.read()
+        text_results = analyze_text_from_bytes(image_bytes)
+        return JSONResponse(content={"results": text_results})
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
+
+
