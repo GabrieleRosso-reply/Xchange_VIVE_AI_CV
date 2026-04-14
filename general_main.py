@@ -128,7 +128,8 @@ app = FastAPI()
 
 API_KEY: str = os.getenv("API_KEY", "ciao")
 
-reader = easyocr.Reader(["it", "en"], gpu=False)
+#reader = easyocr.Reader(["it", "en"], gpu=False)
+reader = easyocr.Reader(["it", "en"], gpu=False, quantize=True)
 
 
 '''General endpoints'''
