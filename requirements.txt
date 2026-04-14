@@ -1,6 +1,9 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
 fastapi
 uvicorn
-gunicorn
 python-multipart
 opencv-python-headless
 numpy
+easyocr
