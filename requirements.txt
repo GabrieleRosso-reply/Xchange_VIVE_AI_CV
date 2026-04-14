@@ -4,3 +4,4 @@ gunicorn
 python-multipart
 opencv-python-headless
 numpy
+easyocr
