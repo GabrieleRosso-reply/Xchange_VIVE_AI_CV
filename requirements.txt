@@ -3,4 +3,5 @@ uvicorn
 python-multipart
 opencv-python-headless
 numpy
-rapidocr-onnxruntime
+rapidocr
+onnxruntime
