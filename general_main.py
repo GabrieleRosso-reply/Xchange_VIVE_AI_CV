@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 import cv2
 import numpy as np
 import os
-from rapidocr import RapidOCR
+from rapidocr_onnxruntime import RapidOCR
 
 # ─── Engine globale ───────────────────────────────────────────────────────────
 ocr_engine: RapidOCR | None = None
@@ -103,13 +103,14 @@ def analyze_text_from_bytes(image_bytes: bytes) -> list:
     if img is None:
         raise ValueError("Impossibile decodificare l'immagine")
 
-    result = ocr_engine(img, use_cls=False)  # ← usa engine globale
+    raw_results, elapse = ocr_engine(img, use_cls=False)
 
     final_output = []
     threshold = 0.25
 
-    if result.txts:
-        for box, text, score in zip(result.boxes, result.txts, result.scores):
+    if raw_results:
+        for item in raw_results:
+            box, text, score = item[0], item[1], item[2]
             if score > threshold:
                 category = get_local_background_category(img, box)
                 final_output.append({
